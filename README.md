@@ -1,5 +1,5 @@
 # CV-Pipeline-Benchmarker
-For monitoring CPU usage of each processes spawned in the script and total usage of each core.
+Monitor CPU usage of each processes spawned in the script and total usage of each core.
 
 ### Run the virtual environment
 
