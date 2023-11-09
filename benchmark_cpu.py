@@ -101,17 +101,15 @@ def cv_pipe(conn_in, conn_out):
         pass
 
 
-def monitor_cpu_usage(process_dictionary):
+def monitor_cpu_usage(pid_list):
     print("Printing CPU usage for each process, and usage of each CPU, all in %")
     print("loading...")
     time.sleep(3.0)  # wait for the other processes to be spawned
 
-    # a list to store the psutil processes
     psu_list = []
 
-    for process in process_dictionary:
-        p = process_dictionary[process]
-        psu_list.append(psutil.Process(p.pid))
+    for pid in pid_list:
+        psu_list.append(psutil.Process(pid))
 
     for count in range(args.monitor_count):
         # monitor the cpu usage of each process
@@ -183,14 +181,18 @@ def main():
                 ),
             )
 
-    # start the processes
+    # the list for storing PIDs for monitoring
+    pid_list = []
+
+    # start the processes and put PIDs of process in the list
     for process in process_dict:
         p = process_dict[process]
         p.start()
+        pid_list.append(p.pid)
 
     # start the monitoring in a separate process
     monitor_process = multiprocessing.Process(
-        target=monitor_cpu_usage, args=(process_dict,)
+        target=monitor_cpu_usage, args=(pid_list,)
     )
     monitor_process.start()
 
