@@ -1,17 +1,20 @@
 # CV-Pipeline-Benchmarker
+
 Monitor CPU usage of each processes spawned in the script and total usage of each core.
 
-### Run the virtual environment
+## Run the virtual environment
 
 If running on windows:
-```
+
+```python
 python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
 If running on linux:
-```
+
+```python
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -22,11 +25,13 @@ pip install -r requirements.txt
 Run `benchmark_cpu.py` to see the CPU usage in real-time.
 
 Play around with how many process you want to create, and other arguments by reading:
-```
+
+```python
 python benchmark_cpu.py --help
 ```
 
 ### Basic purpose of the script
+
 Ideally, you would set the processes between 2 and total logical cores.
 Run `get_cpu_count.py` to get the number of logical and physical cores.
 Spawning too much process however creates too much overhead making it inefficient.
