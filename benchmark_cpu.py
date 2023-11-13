@@ -1,12 +1,14 @@
 import argparse
-from multiprocessing import Pipe, Process
 import time
+from collections import deque
+from multiprocessing import Pipe, Process
+from multiprocessing.pool import ThreadPool
 
 import cv2
+import imutils
 import numpy as np
 import psutil
 from imutils.video import VideoStream
-import imutils
 
 PROCESS_READY = "ready"
 PROCESS_BUSY = "busy"
@@ -29,7 +31,14 @@ parser.add_argument(
     help="number of cv pipe processes to spawn, not counting the video buffer",
 )
 parser.add_argument(
-    "-m",
+    "-t",
+    "--thread_count",
+    type=int,
+    default=0,
+    help="number of threads to make per process",
+)
+parser.add_argument(
+    "-mc",
     "--monitor_count",
     type=int,
     default=11,
@@ -43,7 +52,7 @@ parser.add_argument(
     help="the interval of taking monitoring samples (in seconds)",
 )
 parser.add_argument(
-    "-t",
+    "-tc",
     "--monitor_total_cpu",
     action="store_false",
     default=True,
@@ -70,13 +79,20 @@ def video_buffer(conn_out):
 
             status = conn_out.recv()
             if status == PROCESS_READY:
-                # frame = imutils.resize(frame, width=1280, height=720)
+                frame = imutils.resize(frame, width=1280, height=720)
                 conn_out.send(frame)
+
             else:
                 pass
 
     except KeyboardInterrupt:
         pass
+
+
+def blur_loop(frame, times):
+    for _ in range(times):
+        frame = cv2.medianBlur(frame, 19)
+    return frame
 
 
 def cv_func(conn_in, conn_out):
@@ -85,6 +101,7 @@ def cv_func(conn_in, conn_out):
     :param numpy.ndarray conn_in: the connection to receive the frame
     :param numpy.ndarray conn_out: the connection to send the frame
     """
+
     try:
         while True:
             conn_in.send(PROCESS_READY)
@@ -93,11 +110,39 @@ def cv_func(conn_in, conn_out):
 
             status = conn_out.recv()
             if status == PROCESS_READY:
-                for _ in range(args.blur_count):
-                    frame = cv2.medianBlur(frame, 19)
+                frame = blur_loop(frame, args.blur_count)
                 conn_out.send(frame)
-            else:
-                pass
+
+    except KeyboardInterrupt:
+        pass
+
+
+def cv_func_threaded(conn_in, conn_out, thread_num):
+    """Simulate a computer vision pipeline by blurring the frame a number of times.
+
+    :param numpy.ndarray conn_in: the connection to receive the frame
+    :param numpy.ndarray conn_out: the connection to send the frame
+    """
+
+    pool = ThreadPool(processes=thread_num)
+    pending_task = deque()
+
+    try:
+        while True:
+            # Consume the queue.
+            while len(pending_task) > 0 and pending_task[0].ready():
+                frame = pending_task.popleft().get()
+                status = conn_out.recv()
+                if status == PROCESS_READY:
+                    conn_out.send(frame)
+
+            # Populate the queue.
+            if len(pending_task) < thread_num:
+                conn_in.send(PROCESS_READY)
+                frame = conn_in.recv()
+                conn_in.send(PROCESS_BUSY)
+                task = pool.apply_async(blur_loop, (frame.copy(), args.blur_count))
+                pending_task.append(task)
 
     except KeyboardInterrupt:
         pass
@@ -138,13 +183,22 @@ def run_multi_pipe():
 
     vs_process = Process(target=video_buffer, args=(cv_pipes[0][1],))
 
-    cv_processes = [
-        Process(
-            target=cv_func,
-            args=(cv_pipes[i][0], cv_pipes[i + 1][1]),
-        )
-        for i in range(args.process_count)
-    ]
+    if args.thread_count < 1:
+        cv_processes = [
+            Process(
+                target=cv_func,
+                args=(cv_pipes[i][0], cv_pipes[i + 1][1]),
+            )
+            for i in range(args.process_count)
+        ]
+    else:
+        cv_processes = [
+            Process(
+                target=cv_func_threaded,
+                args=(cv_pipes[i][0], cv_pipes[i + 1][1], args.thread_count),
+            )
+            for i in range(args.process_count)
+        ]
 
     # the list for storing PIDs for monitoring
     pid_list = []
