@@ -198,9 +198,6 @@ def monitor_cpu_usage(pid_list, event):
 
 
 def run_multi_pipe():
-    fps_measure = FPS()
-    fps_measure.start()
-
     stop_event = Event()
 
     # add 1 more pipe for the video stream process
@@ -238,6 +235,9 @@ def run_multi_pipe():
     # start the monitoring in a separate process
     monitor_process = Process(target=monitor_cpu_usage, args=(pid_list, stop_event))
     monitor_process.start()
+
+    fps_measure = FPS()
+    fps_measure.start()
 
     try:
         # display frames
