@@ -1,8 +1,11 @@
 import argparse
-import multiprocessing
 import time
+from collections import deque
+from multiprocessing import Pipe, Process, Event
+from multiprocessing.pool import ThreadPool
 
 import cv2
+import imutils
 import numpy as np
 import psutil
 from imutils.video import VideoStream
@@ -25,10 +28,17 @@ parser.add_argument(
     "--process_count",
     type=int,
     default=3,
-    help="number of processes to spawn, with 1 meaning only the video buffer gets created",
+    help="number of cv pipe processes to spawn, not counting the video buffer",
 )
 parser.add_argument(
-    "-m",
+    "-t",
+    "--thread_count",
+    type=int,
+    default=0,
+    help="number of threads to make per process",
+)
+parser.add_argument(
+    "-mc",
     "--monitor_count",
     type=int,
     default=11,
@@ -42,7 +52,7 @@ parser.add_argument(
     help="the interval of taking monitoring samples (in seconds)",
 )
 parser.add_argument(
-    "-t",
+    "-tc",
     "--monitor_total_cpu",
     action="store_false",
     default=True,
@@ -58,6 +68,24 @@ parser.add_argument(
 args = parser.parse_args()
 
 
+class FPS:
+    def __init__(self):
+        self.start_time = 0
+        self.frames = 0
+
+    def start(self):
+        self.start_time = time.perf_counter()
+        self.frames = 0
+
+    def update(self):
+        self.frames += 1
+
+    def stop(self):
+        elapsed_time = time.perf_counter() - self.start_time
+        fps = self.frames / elapsed_time
+        return fps
+
+
 # Function to read video frames from a camera stream
 def video_buffer(conn_out):
     vs = VideoStream(src=0).start()  # Open the camera
@@ -67,58 +95,89 @@ def video_buffer(conn_out):
         while True:
             frame = vs.read()
 
-            detect_status = conn_out.recv()
-            if detect_status == PROCESS_READY:
+            status = conn_out.recv()
+            if status == PROCESS_READY:
+                frame = imutils.resize(frame, width=1280, height=720)
                 conn_out.send(frame)
-            if detect_status == PROCESS_BUSY:
+
+            else:
                 pass
 
     except KeyboardInterrupt:
         pass
 
 
-def cv_pipe(conn_in, conn_out):
+def blur_loop(frame, times):
+    for _ in range(times):
+        frame = cv2.medianBlur(frame, 19)
+    return frame
+
+
+def cv_func(conn_in, conn_out):
     """Simulate a computer vision pipeline by blurring the frame a number of times.
 
     :param numpy.ndarray conn_in: the connection to receive the frame
     :param numpy.ndarray conn_out: the connection to send the frame
     """
+
     try:
         while True:
             conn_in.send(PROCESS_READY)
             frame = conn_in.recv()
             conn_in.send(PROCESS_BUSY)
 
-            accept_status = conn_out.recv()
-            if accept_status == PROCESS_READY:
-                for _ in range(args.blur_count):
-                    frame = cv2.medianBlur(frame, 19)
+            status = conn_out.recv()
+            if status == PROCESS_READY:
+                frame = blur_loop(frame, args.blur_count)
                 conn_out.send(frame)
-            if accept_status == PROCESS_BUSY:
-                pass
 
     except KeyboardInterrupt:
         pass
 
 
-def monitor_cpu_usage(pid_list):
+def cv_func_threaded(conn_in, conn_out, thread_num):
+    """Simulate a computer vision pipeline by blurring the frame a number of times.
+
+    :param numpy.ndarray conn_in: the connection to receive the frame
+    :param numpy.ndarray conn_out: the connection to send the frame
+    """
+
+    pool = ThreadPool(processes=thread_num)
+    pending_task = deque()
+
+    try:
+        while True:
+            # Consume the queue.
+            while len(pending_task) > 0 and pending_task[0].ready():
+                frame = pending_task.popleft().get()
+                status = conn_out.recv()
+                if status == PROCESS_READY:
+                    conn_out.send(frame)
+
+            # Populate the queue.
+            if len(pending_task) < thread_num:
+                conn_in.send(PROCESS_READY)
+                frame = conn_in.recv()
+                conn_in.send(PROCESS_BUSY)
+                task = pool.apply_async(blur_loop, (frame.copy(), args.blur_count))
+                pending_task.append(task)
+
+    except KeyboardInterrupt:
+        pass
+
+
+def monitor_cpu_usage(pid_list, event):
     print("Printing CPU usage for each process, and usage of each CPU, all in %")
     print("loading...")
     time.sleep(3.0)  # wait for the other processes to be spawned
 
-    psu_list = []
-
-    for pid in pid_list:
-        psu_list.append(psutil.Process(pid))
+    psu_list = [psutil.Process(pid) for pid in pid_list]
 
     for count in range(args.monitor_count):
         # monitor the cpu usage of each process
-        u_list = []
-        for psu in psu_list:
-            cpu_usage = psu.cpu_percent(
-                interval=None
-            )  # set to None so it is non-blocking
-            u_list.append(cpu_usage)
+        p_list = [
+            psu.cpu_percent(interval=None) for psu in psu_list
+        ]  # set to None so it is non-blocking
 
         # monitor the overall cpu usage
         cpu = psutil.cpu_percent(
@@ -126,9 +185,11 @@ def monitor_cpu_usage(pid_list):
         )
 
         # Print the results
-        print(f"-----Count {count}-----")
-        print(f"process: {u_list}")
+        print(f"----- Count {count} -----")
+        print(f"process: {p_list}")
         print(f"cpu: {cpu}")
+
+    event.set()
 
     if args.frame_hide:
         print("Monitoring finished. To exit, do a KeyboardInterrupt (ctrl + c).")
@@ -136,77 +197,64 @@ def monitor_cpu_usage(pid_list):
         print("Monitoring finished. To exit, press 'Esc' key.")
 
 
-# create and get pipe names. In for loop starting index 0, name is pipe0_1
-def get_pipe_name(p_index: int) -> str:
-    pipe_name = f"pipe{p_index}_{p_index+1}"
-    return str(pipe_name)
+def run_multi_pipe():
+    fps_measure = FPS()
+    fps_measure.start()
 
+    stop_event = Event()
 
-# create and get process names. In for loop starting index 0, name is process0
-def get_process_name(p_index: int) -> str:
-    process_name = f"process{p_index}"
-    return str(process_name)
+    # add 1 more pipe for the video stream process
+    cv_pipes = [Pipe() for i in range(args.process_count + 1)]
 
+    vs_process = Process(target=video_buffer, args=(cv_pipes[0][1],))
 
-def main():
-    # Check because we need at least 1 process to be spawned
-    if args.process_count < 1:
-        print(
-            f"You tried to spawn {args.process_count} processes.\
-            \nPlease input a number between 1 and total logical cores minus 2."
-        )
-        return
-
-    # create dictionaries for reference
-    pipe_dict = {}
-    process_dict = {}
-
-    # create pipes
-    for pipe_index in range(args.process_count):
-        pipe_dict[get_pipe_name(pipe_index)] = multiprocessing.Pipe()
-
-    # create processes
-    for process_index in range(args.process_count):
-        # spawn a get cam frames from start then apply cv methods for the succeeding
-        if process_index == 0:
-            process_dict[get_process_name(process_index)] = multiprocessing.Process(
-                target=video_buffer, args=(pipe_dict[get_pipe_name(process_index)][1],)
+    if args.thread_count < 1:
+        cv_processes = [
+            Process(
+                target=cv_func,
+                args=(cv_pipes[i][0], cv_pipes[i + 1][1]),
             )
-        else:
-            process_dict[get_process_name(process_index)] = multiprocessing.Process(
-                target=cv_pipe,
-                args=(
-                    pipe_dict[get_pipe_name(process_index - 1)][0],
-                    pipe_dict[get_pipe_name(process_index)][1],
-                ),
+            for i in range(args.process_count)
+        ]
+    else:
+        cv_processes = [
+            Process(
+                target=cv_func_threaded,
+                args=(cv_pipes[i][0], cv_pipes[i + 1][1], args.thread_count),
             )
+            for i in range(args.process_count)
+        ]
 
     # the list for storing PIDs for monitoring
     pid_list = []
 
-    # start the processes and put PIDs of process in the list
-    for process in process_dict:
-        p = process_dict[process]
-        p.start()
-        pid_list.append(p.pid)
+    vs_process.start()
+    pid_list.append(vs_process.pid)
+
+    for cv_process in cv_processes:
+        cv_process.start()
+        pid_list.append(cv_process.pid)
 
     # start the monitoring in a separate process
-    monitor_process = multiprocessing.Process(
-        target=monitor_cpu_usage, args=(pid_list,)
-    )
+    monitor_process = Process(target=monitor_cpu_usage, args=(pid_list, stop_event))
     monitor_process.start()
 
     try:
         # display frames
         while True:
             # receive frames from the last connection of the whole pipeline
-            last_conn = pipe_dict[get_pipe_name(args.process_count - 1)][0]
+            last_conn = cv_pipes[-1][0]
             last_conn.send(PROCESS_READY)
             frame = last_conn.recv()
             last_conn.send(PROCESS_BUSY)
 
+            fps_measure.update()
+
             if args.frame_hide is not True:
                 cv2.imshow("Benchmarking", frame)
+
+            if stop_event.is_set():  # stop when monitoring is finished
+                break
 
             ch = cv2.waitKey(1)
             if ch == 27:  # Press escape key to exit
@@ -215,14 +263,17 @@ def main():
     except KeyboardInterrupt:
         pass
 
-    # cleanup
-    for process in process_dict:
-        p = process_dict[process]
-        p.terminate()
+    average_fps = fps_measure.stop()
+    print(f"average fps: {average_fps}")
 
+    # cleanup
     monitor_process.terminate()
+    vs_process.terminate()
+    for cv_process in cv_processes:
+        cv_process.terminate()
+
     cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
-    main()
+    run_multi_pipe()
