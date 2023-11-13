@@ -1,7 +1,7 @@
 import argparse
 import time
 from collections import deque
-from multiprocessing import Pipe, Process
+from multiprocessing import Pipe, Process, Event
 from multiprocessing.pool import ThreadPool
 
 import cv2
@@ -166,7 +166,7 @@ def cv_func_threaded(conn_in, conn_out, thread_num):
         pass
 
 
-def monitor_cpu_usage(pid_list):
+def monitor_cpu_usage(pid_list, event):
     print("Printing CPU usage for each process, and usage of each CPU, all in %")
     print("loading...")
     time.sleep(3.0)  # wait for the other processes to be spawned
@@ -189,6 +189,8 @@ def monitor_cpu_usage(pid_list):
         print(f"process: {p_list}")
         print(f"cpu: {cpu}")
 
+    event.set()
+
     if args.frame_hide:
         print("Monitoring finished. To exit, do a KeyboardInterrupt (ctrl + c).")
     else:
@@ -198,6 +200,8 @@ def monitor_cpu_usage(pid_list):
 def run_multi_pipe():
     fps_measure = FPS()
     fps_measure.start()
+
+    stop_event = Event()
 
     # add 1 more pipe for the video stream process
     cv_pipes = [Pipe() for i in range(args.process_count + 1)]
@@ -232,7 +236,7 @@ def run_multi_pipe():
         pid_list.append(cv_process.pid)
 
     # start the monitoring in a separate process
-    monitor_process = Process(target=monitor_cpu_usage, args=(pid_list,))
+    monitor_process = Process(target=monitor_cpu_usage, args=(pid_list, stop_event))
     monitor_process.start()
 
     try:
@@ -248,6 +252,9 @@ def run_multi_pipe():
 
             if args.frame_hide is not True:
                 cv2.imshow("Benchmarking", frame)
+
+            if stop_event.is_set():  # stop when monitoring is finished
+                break
 
             ch = cv2.waitKey(1)
             if ch == 27:  # Press escape key to exit
