@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import psutil
 from imutils.video import VideoStream
+import imutils
 
 PROCESS_READY = "ready"
 PROCESS_BUSY = "busy"
@@ -67,10 +68,11 @@ def video_buffer(conn_out):
         while True:
             frame = vs.read()
 
-            detect_status = conn_out.recv()
-            if detect_status == PROCESS_READY:
+            status = conn_out.recv()
+            if status == PROCESS_READY:
+                # frame = imutils.resize(frame, width=1280, height=720)
                 conn_out.send(frame)
-            if detect_status == PROCESS_BUSY:
+            else:
                 pass
 
     except KeyboardInterrupt:
@@ -89,12 +91,12 @@ def cv_func(conn_in, conn_out):
             frame = conn_in.recv()
             conn_in.send(PROCESS_BUSY)
 
-            accept_status = conn_out.recv()
-            if accept_status == PROCESS_READY:
+            status = conn_out.recv()
+            if status == PROCESS_READY:
                 for _ in range(args.blur_count):
                     frame = cv2.medianBlur(frame, 19)
                 conn_out.send(frame)
-            if accept_status == PROCESS_BUSY:
+            else:
                 pass
 
     except KeyboardInterrupt:
