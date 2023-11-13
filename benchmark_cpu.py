@@ -68,6 +68,24 @@ parser.add_argument(
 args = parser.parse_args()
 
 
+class FPS:
+    def __init__(self):
+        self.start_time = 0
+        self.frames = 0
+
+    def start(self):
+        self.start_time = time.perf_counter()
+        self.frames = 0
+
+    def update(self):
+        self.frames += 1
+
+    def stop(self):
+        elapsed_time = time.perf_counter() - self.start_time
+        fps = self.frames / elapsed_time
+        return fps
+
+
 # Function to read video frames from a camera stream
 def video_buffer(conn_out):
     vs = VideoStream(src=0).start()  # Open the camera
@@ -178,6 +196,9 @@ def monitor_cpu_usage(pid_list):
 
 
 def run_multi_pipe():
+    fps_measure = FPS()
+    fps_measure.start()
+
     # add 1 more pipe for the video stream process
     cv_pipes = [Pipe() for i in range(args.process_count + 1)]
 
@@ -223,6 +244,8 @@ def run_multi_pipe():
             frame = last_conn.recv()
             last_conn.send(PROCESS_BUSY)
 
+            fps_measure.update()
+
             if args.frame_hide is not True:
                 cv2.imshow("Benchmarking", frame)
 
@@ -232,6 +255,9 @@ def run_multi_pipe():
 
     except KeyboardInterrupt:
         pass
+
+    average_fps = fps_measure.stop()
+    print(f"average fps: {average_fps}")
 
     # cleanup
     monitor_process.terminate()
