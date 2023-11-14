@@ -307,7 +307,7 @@ def run_multi_pipe():
     cv2.destroyAllWindows()
 
     save_result(str_fps, RESULTS_NAME)
-    # os.system("echo 'test_fps' >> {RESULTS}")
+    print("Exited Successfully...")
 
 
 if __name__ == "__main__":
