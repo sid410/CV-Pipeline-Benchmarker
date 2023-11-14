@@ -80,7 +80,7 @@ class FPS:
     def update(self):
         self.frames += 1
 
-    def stop(self):
+    def average(self):
         elapsed_time = time.perf_counter() - self.start_time
         fps = self.frames / elapsed_time
         return fps
@@ -263,7 +263,7 @@ def run_multi_pipe():
     except KeyboardInterrupt:
         pass
 
-    average_fps = fps_measure.stop()
+    average_fps = fps_measure.average()
     print(f"average fps: {average_fps}")
 
     # cleanup
