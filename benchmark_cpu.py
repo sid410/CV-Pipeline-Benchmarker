@@ -4,6 +4,7 @@ from collections import deque
 from multiprocessing import Pipe, Process, Event
 from multiprocessing.pool import ThreadPool
 from progressbar import progressbar
+import os
 
 import cv2
 import imutils
@@ -55,9 +56,9 @@ parser.add_argument(
 parser.add_argument(
     "-tc",
     "--monitor_total_cpu",
-    action="store_false",
-    default=True,
-    help="call argument to show overall core usage (not per cpu)",
+    action="store_true",
+    default=False,
+    help="call argument to show per core usage (not overall cpu)",
 )
 parser.add_argument(
     "-f",
@@ -67,6 +68,9 @@ parser.add_argument(
     help="call argument to hide the frame (skip cv2.imshow)",
 )
 args = parser.parse_args()
+
+
+RESULTS_NAME = f"./results/p{args.process_count}_b{args.blur_count}_t{args.thread_count}_mc{args.monitor_count}_f-{args.frame_hide}.txt"
 
 
 class FPS:
@@ -202,18 +206,28 @@ def monitor_cpu_usage(pid_list, event):
         process_sum = np.add(process_sum, p_list)
         cpu_sum = cpu_sum + cpu
 
+    event.set()
+
+    str_process = ""
+
     # less 1 because first values are 0 for processes
     process_sum = process_sum / (args.monitor_count - 1)
     for num, usage in enumerate(process_sum):
-        print(f"average Process{num}: {usage}")
-    print(f"average CPU: {cpu_sum / args.monitor_count}")
+        str_process = f"Process{num}: {usage}"
+        save_result(str_process, RESULTS_NAME)
 
-    event.set()
+    str_cpu = f"CPU: {cpu_sum / args.monitor_count}"
+    save_result(str_cpu, RESULTS_NAME)
 
     # if args.frame_hide:
     #     print("Monitoring finished. To exit, do a KeyboardInterrupt (ctrl + c).")
     # else:
     #     print("Monitoring finished. To exit, press 'Esc' key.")
+
+
+def save_result(str_result, filename):
+    cmd = "echo {0} >> {1}".format(str_result, filename)
+    os.system(cmd)
 
 
 def run_multi_pipe():
@@ -282,15 +296,18 @@ def run_multi_pipe():
         pass
 
     average_fps = fps_measure.average()
-    print(f"average FPS: {average_fps}")
+    str_fps = f"FPS: {average_fps}"
 
     # cleanup
-    monitor_process.terminate()
+    monitor_process.join()  # wait for the monitor process to stop, then terminate the rest
     vs_process.terminate()
     for cv_process in cv_processes:
         cv_process.terminate()
 
     cv2.destroyAllWindows()
+
+    save_result(str_fps, RESULTS_NAME)
+    # os.system("echo 'test_fps' >> {RESULTS}")
 
 
 if __name__ == "__main__":
