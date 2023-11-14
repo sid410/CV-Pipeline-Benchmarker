@@ -206,7 +206,7 @@ def monitor_cpu_usage(pid_list, event):
     process_sum = process_sum / (args.monitor_count - 1)
     for num, usage in enumerate(process_sum):
         print(f"average Process{num}: {usage}")
-    print(f"average CPU: {cpu_sum / (args.monitor_count - 1)}")
+    print(f"average CPU: {cpu_sum / args.monitor_count}")
 
     event.set()
 
