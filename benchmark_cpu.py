@@ -3,6 +3,7 @@ import time
 from collections import deque
 from multiprocessing import Pipe, Process, Event
 from multiprocessing.pool import ThreadPool
+from progressbar import progressbar
 
 import cv2
 import imutils
@@ -41,7 +42,7 @@ parser.add_argument(
     "-mc",
     "--monitor_count",
     type=int,
-    default=11,
+    default=10,
     help="the number of times to take a sample of monitoring CPU usage",
 )
 parser.add_argument(
@@ -70,7 +71,7 @@ args = parser.parse_args()
 
 class FPS:
     def __init__(self):
-        self.start_time = 0
+        self.start_time = None
         self.frames = 0
 
     def start(self):
@@ -78,9 +79,13 @@ class FPS:
         self.frames = 0
 
     def update(self):
+        if self.start_time is None:
+            self.start_time = time.perf_counter()
         self.frames += 1
 
     def average(self):
+        if self.start_time is None:
+            return None
         elapsed_time = time.perf_counter() - self.start_time
         fps = self.frames / elapsed_time
         return fps
@@ -173,7 +178,11 @@ def monitor_cpu_usage(pid_list, event):
 
     psu_list = [psutil.Process(pid) for pid in pid_list]
 
-    for count in range(args.monitor_count):
+    process_sum = np.zeros(shape=(args.process_count + 1))
+    cpu_sum = 0
+
+    # we do +1 because we do not count 0 as it is 0%
+    for count in progressbar(range(args.monitor_count + 1)):
         # monitor the cpu usage of each process
         p_list = [
             psu.cpu_percent(interval=None) for psu in psu_list
@@ -185,16 +194,26 @@ def monitor_cpu_usage(pid_list, event):
         )
 
         # Print the results
-        print(f"----- Count {count} -----")
-        print(f"process: {p_list}")
-        print(f"cpu: {cpu}")
+        # print(f"----- Count {count} -----")
+        # print(f"process: {p_list}")
+        # print(f"cpu: {cpu}")
+
+        # save the results
+        process_sum = np.add(process_sum, p_list)
+        cpu_sum = cpu_sum + cpu
+
+    # less 1 because first values are 0 for processes
+    process_sum = process_sum / (args.monitor_count - 1)
+    for num, usage in enumerate(process_sum):
+        print(f"average Process{num}: {usage}")
+    print(f"average CPU: {cpu_sum / (args.monitor_count - 1)}")
 
     event.set()
 
-    if args.frame_hide:
-        print("Monitoring finished. To exit, do a KeyboardInterrupt (ctrl + c).")
-    else:
-        print("Monitoring finished. To exit, press 'Esc' key.")
+    # if args.frame_hide:
+    #     print("Monitoring finished. To exit, do a KeyboardInterrupt (ctrl + c).")
+    # else:
+    #     print("Monitoring finished. To exit, press 'Esc' key.")
 
 
 def run_multi_pipe():
@@ -237,7 +256,6 @@ def run_multi_pipe():
     monitor_process.start()
 
     fps_measure = FPS()
-    fps_measure.start()
 
     try:
         # display frames
@@ -264,7 +282,7 @@ def run_multi_pipe():
         pass
 
     average_fps = fps_measure.average()
-    print(f"average fps: {average_fps}")
+    print(f"average FPS: {average_fps}")
 
     # cleanup
     monitor_process.terminate()
